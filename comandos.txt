@@ -1,0 +1,25 @@
+# 1) (opcional) cria o projeto
+oc new-project base64 || true
+
+# 2) Cria um BuildConfig a partir do Dockerfile
+oc new-build --name=base64 --strategy=docker --binary
+
+# 3) Dispara build usando os arquivos locais (Dockerfile, app.py, requirements.txt)
+oc start-build base64 --from-dir=. --follow
+
+# 4) Cria o Deployment + Service a partir da imagem recém-buildada
+oc new-app base64
+
+# 5) Expõe rota externa
+oc expose svc/base64
+oc get route base64
+# copie a URL e teste
+
+
+
+# build
+docker build -t base64-flask:latest .
+
+# run
+docker run --rm -e PORT=8080 -p 8080:8080 base64-flask:latest
+# abre em http://localhost:8080
