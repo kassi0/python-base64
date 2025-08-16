@@ -5,7 +5,10 @@
 Flask Base64 Tool — encode/decode de texto e arquivos
 - UI web (/) mostra SEMPRE o resultado.
 - Download é OPCIONAL (botão) — exceto no DECODE de arquivo (auto-download).
-- API JSON /api/encode e /api/decode continuam disponíveis.
+- API JSON /api/encode e /api/decode.
+- Inclui favicon e botão "Limpar" que realmente limpa tudo.
+- Detecta tipo de arquivo ao decodificar texto Base64 (PDF/PNG/JPG/...).
+- Suporta data URLs: data:application/pdf;base64,AAAA...
 """
 
 import os
@@ -25,6 +28,7 @@ DEBUG = os.getenv("DEBUG", "0") == "1"
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_MB * 1024 * 1024
+
 
 # ---------- Helpers ----------
 def _fix_padding(b: bytes) -> bytes:
@@ -60,8 +64,46 @@ def hexdump_preview(b: bytes, maxlen: int = 64) -> str:
     hexstr = " ".join(f"{x:02x}" for x in sl)
     return hexstr + (" …" if len(b) > maxlen else "")
 
+def detect_ext_and_mime(b: bytes) -> tuple[str, str, str]:
+    """
+    Retorna (extensao, mime, label) com base na assinatura mágica.
+    Cobertura comum; fallback é .bin.
+    """
+    if b.startswith(b'%PDF-'):
+        return ('.pdf', 'application/pdf', 'PDF')
+    if b.startswith(b'\x89PNG\r\n\x1a\n'):
+        return ('.png', 'image/png', 'PNG')
+    if b.startswith(b'\xff\xd8\xff'):
+        return ('.jpg', 'image/jpeg', 'JPEG')
+    if b.startswith(b'GIF87a') or b.startswith(b'GIF89a'):
+        return ('.gif', 'image/gif', 'GIF')
+    if b[:4] == b'PK\x03\x04':
+        return ('.zip', 'application/zip', 'ZIP')
+    if b[:2] == b'BM':
+        return ('.bmp', 'image/bmp', 'BMP')
+    if b[:2] == b'MZ':
+        return ('.exe', 'application/octet-stream', 'EXE/PE')
+    if b[:3] == b'ID3' or b[:2] == b'\xff\xfb':
+        return ('.mp3', 'audio/mpeg', 'MP3')
+    if b[:2] == b'\x1f\x8b':
+        return ('.gz', 'application/gzip', 'GZIP')
+    return ('.bin', 'application/octet-stream', 'Binário')
+
+def strip_data_url_prefix(s: str) -> tuple[str, str | None]:
+    """
+    Se for data URL (data:<mime>;base64,<dados>), remove o prefixo
+    e retorna (base64, mime_hint). Caso contrário, (s, None).
+    """
+    low = s.lower()
+    if low.startswith('data:') and ';base64,' in low:
+        header, data_part = s.split(',', 1)
+        mime = header[5:].split(';', 1)[0].strip() or None
+        return data_part, mime
+    return s, None
+
+
 # ---------- UI ----------
-INDEX_HTML = """
+INDEX_HTML = r"""
 <!doctype html>
 <html lang="pt-br">
 <head>
@@ -106,7 +148,7 @@ INDEX_HTML = """
       <h1>🔐 {{ title }}</h1>
       <div class="sub">Encode/Decode Base64 — resultado aparece aqui; download é opcional (exceto decode de arquivo).</div>
 
-      <form class="row" action="/process" method="post" enctype="multipart/form-data">
+      <form id="mainForm" class="row" action="/process" method="post" enctype="multipart/form-data">
         <div class="col">
           <h3>Entrada</h3>
           <textarea name="input_text" placeholder="Cole seu texto ou Base64 aqui (opcional se enviar arquivo)">{{ input_text or "" }}</textarea>
@@ -138,29 +180,7 @@ INDEX_HTML = """
           {% endif %}
         </div>
       </form>
-        <script>
-        (() => {
-        const btn = document.getElementById('btnClear');
-        if (!btn) return;
 
-        btn.addEventListener('click', () => {
-            // campos de entrada
-            const ta   = document.querySelector('textarea[name="input_text"]');
-            const file = document.querySelector('input[type="file"][name="input_file"]');
-            if (ta)   ta.value = '';
-            if (file) file.value = '';   // alguns browsers não limpam com reset
-
-            // resultado de texto
-            const res = document.getElementById('result');
-            if (res) res.value = '';
-
-            // remove blocos de resultado/mensagens renderizados pelo servidor
-            document.querySelectorAll('.result-block').forEach(el => el.remove());
-            const msg = document.querySelector('p.ok, p.err');
-            if (msg) msg.remove();
-        });
-        })();
-        </script>
       {% if result_text is not none %}
         <div class="result-block">
           <h3>Resultado (texto)</h3>
@@ -168,7 +188,7 @@ INDEX_HTML = """
           <div class="footer">
             <span class="muted">Tamanho: {{ (result_text|length) }} chars.</span>
             <div style="display:flex; gap:8px; margin-left:auto;">
-              <button onclick="copyRes()">Copiar</button>
+              <button type="button" onclick="copyRes()">Copiar</button>
               {% if downloadable_text %}
               <form class="inline" action="/download_text" method="post">
                 <input type="hidden" name="filename" value="{{ download_text_name }}">
@@ -179,13 +199,6 @@ INDEX_HTML = """
             </div>
           </div>
         </div>
-        <script>
-          function copyRes(){
-            const ta = document.getElementById('result');
-            ta.select(); ta.setSelectionRange(0, 999999);
-            document.execCommand('copy');
-          }
-        </script>
       {% endif %}
 
       {% if result_is_binary %}
@@ -193,10 +206,13 @@ INDEX_HTML = """
           <h3>Resultado (binário)</h3>
           <div class="preview">Prévia (hex): {{ preview_hex }}</div>
           <div class="footer">
-            <span class="muted">Conteúdo não-textual detectado.</span>
+            <span class="muted">
+              Conteúdo não-textual detectado{% if detected_label %}: {{ detected_label }}{% endif %}.
+            </span>
             <form class="inline" action="/download_binary" method="post">
               <input type="hidden" name="filename" value="{{ download_binary_name }}">
               <input type="hidden" name="content_b64" value="{{ result_binary_b64 }}">
+              <input type="hidden" name="mime" value="{{ download_binary_mime or 'application/octet-stream' }}">
               <button type="submit">Baixar arquivo</button>
             </form>
           </div>
@@ -213,6 +229,31 @@ INDEX_HTML = """
       </div>
     </div>
   </div>
+
+  <script>
+    function copyRes(){
+      const ta = document.getElementById('result');
+      if (!ta) return;
+      ta.select(); ta.setSelectionRange(0, 999999);
+      document.execCommand('copy');
+    }
+    (function(){
+      const btn = document.getElementById('btnClear');
+      if (!btn) return;
+      btn.addEventListener('click', () => {
+        const form = document.getElementById('mainForm');
+        // limpa campos
+        const ta = form.querySelector('textarea[name="input_text"]');
+        const file = form.querySelector('input[type="file"][name="input_file"]');
+        if (ta) ta.value = '';
+        if (file) file.value = '';
+        // limpa resultados e mensagens
+        document.querySelectorAll('.result-block').forEach(el => el.remove());
+        const msg = document.querySelector('p.ok, p.err');
+        if (msg) msg.remove();
+      });
+    })();
+  </script>
 </body>
 </html>
 """
@@ -234,12 +275,10 @@ def index():
         downloadable_text=False,
         download_text_name="resultado.txt",
         download_binary_name="resultado.bin",
-        result_binary_b64=""
+        result_binary_b64="",
+        download_binary_mime="application/octet-stream",
+        detected_label=""
     )
-
-@app.route('/favicon.ico')
-def favicon():
-    return redirect(url_for('static', filename='favicon.ico'), code=302)
 
 @app.route("/process", methods=["POST"])
 def process():
@@ -269,7 +308,9 @@ def process():
                 downloadable_text=True,
                 download_text_name=guess_download_name(filename, "encode"),
                 download_binary_name="",
-                result_binary_b64=""
+                result_binary_b64="",
+                download_binary_mime="application/octet-stream",
+                detected_label=""
             )
         else:
             # DECODE de ARQUIVO => auto-download (binário)
@@ -282,7 +323,9 @@ def process():
                     action=action, urlsafe=urlsafe, message=str(e),
                     success=False, max_mb=MAX_MB,
                     downloadable_text=False, download_text_name="",
-                    download_binary_name="", result_binary_b64=""
+                    download_binary_name="", result_binary_b64="",
+                    download_binary_mime="application/octet-stream",
+                    detected_label=""
                 )
             out_io = io.BytesIO(out)
             out_name = guess_download_name(filename, "decode")
@@ -296,7 +339,9 @@ def process():
             action=action, urlsafe=urlsafe,
             message="Forneça texto ou selecione um arquivo.", success=False, max_mb=MAX_MB,
             downloadable_text=False, download_text_name="",
-            download_binary_name="", result_binary_b64=""
+            download_binary_name="", result_binary_b64="",
+            download_binary_mime="application/octet-stream",
+            detected_label=""
         )
 
     if action == "encode":
@@ -306,20 +351,26 @@ def process():
             result_text=out, result_is_binary=False, preview_hex="",
             action=action, urlsafe=urlsafe, message="Encode OK.", success=True, max_mb=MAX_MB,
             downloadable_text=True, download_text_name=guess_download_name("texto", "encode"),
-            download_binary_name="", result_binary_b64=""
+            download_binary_name="", result_binary_b64="",
+            download_binary_mime="application/octet-stream",
+            detected_label=""
         )
     else:
+        # Decodificando texto Base64 (pode ser data URL)
+        b64_text, mime_hint = strip_data_url_prefix(input_text)
         try:
-            raw = b64_decode(input_text.encode("ascii", "ignore"), urlsafe=urlsafe)
+            raw = b64_decode(b64_text.encode("ascii", "ignore"), urlsafe=urlsafe)
         except ValueError as e:
             return render_template_string(
                 INDEX_HTML, title=APP_TITLE, input_text=input_text,
                 result_text=None, result_is_binary=False, preview_hex="",
                 action=action, urlsafe=urlsafe, message=str(e), success=False, max_mb=MAX_MB,
                 downloadable_text=False, download_text_name="",
-                download_binary_name="", result_binary_b64=""
+                download_binary_name="", result_binary_b64="",
+                download_binary_mime="application/octet-stream",
+                detected_label=""
             )
-        # Se for texto UTF-8, mostra; se não, exibe prévia hex e botão de download binário (opcional)
+        # Se for texto UTF-8, mostra; se não, exibe prévia hex e botão de download binário (opcional) com MIME/ext corretos
         try:
             out_text = raw.decode("utf-8")
             return render_template_string(
@@ -327,17 +378,40 @@ def process():
                 result_text=out_text, result_is_binary=False, preview_hex="",
                 action=action, urlsafe=urlsafe, message="Decode OK (texto).", success=True, max_mb=MAX_MB,
                 downloadable_text=True, download_text_name=guess_download_name("texto_decodificado", "decode"),
-                download_binary_name="", result_binary_b64=""
+                download_binary_name="", result_binary_b64="",
+                download_binary_mime="application/octet-stream",
+                detected_label=""
             )
         except UnicodeDecodeError:
+            ext, mime, label = detect_ext_and_mime(raw)
+            # Se veio dica explícita no data URL, respeita
+            if mime_hint:
+                hint_map = {
+                    'application/pdf': '.pdf',
+                    'image/png': '.png',
+                    'image/jpeg': '.jpg',
+                    'image/gif': '.gif',
+                    'application/zip': '.zip',
+                    'application/gzip': '.gz',
+                }
+                ext_hint = hint_map.get(mime_hint)
+                if ext_hint:
+                    ext = ext_hint
+                mime = mime_hint
+                label = mime_hint.upper()
+            download_name = f"arquivo{ext}"
             return render_template_string(
                 INDEX_HTML, title=APP_TITLE, input_text=input_text,
                 result_text=None, result_is_binary=True, preview_hex=hexdump_preview(raw),
-                action=action, urlsafe=urlsafe, message="Decode OK (binário detectado). Use o botão para baixar.", success=True, max_mb=MAX_MB,
+                action=action, urlsafe=urlsafe,
+                message=f"Decode OK (binário detectado: {label}). Use o botão para baixar.", success=True, max_mb=MAX_MB,
                 downloadable_text=False, download_text_name="",
-                download_binary_name=guess_download_name("binario", "decode"),
-                result_binary_b64=base64.b64encode(raw).decode("ascii")
+                download_binary_name=download_name,
+                result_binary_b64=base64.b64encode(raw).decode("ascii"),
+                download_binary_mime=mime,
+                detected_label=label
             )
+
 
 # ---------- Downloads opcionais ----------
 @app.post("/download_text")
@@ -351,12 +425,14 @@ def download_text():
 def download_binary():
     filename = (request.form.get("filename") or "resultado.bin").strip() or "resultado.bin"
     content_b64 = request.form.get("content_b64", "")
+    mime = (request.form.get("mime") or "application/octet-stream").strip() or "application/octet-stream"
     try:
         raw = base64.b64decode(_fix_padding(content_b64.encode("ascii", "ignore")))
     except (binascii.Error, ValueError):
         return abort(400, "Conteúdo Base64 inválido para download.")
     buf = io.BytesIO(raw)
-    return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/octet-stream")
+    return send_file(buf, as_attachment=True, download_name=filename, mimetype=mime)
+
 
 # ---------- API ----------
 @app.post("/api/encode")
@@ -386,7 +462,8 @@ def api_decode():
             return jsonify({"ok": False, "error": str(e)}), 400
         return jsonify({"ok": True, "mode": "file", "decoded_base64": base64.b64encode(raw).decode("ascii"), "urlsafe": urlsafe})
     payload = request.get_json(silent=True) or {}
-    data_b64_text = payload.get("data") or request.form.get("data")
+    data_b64_text = payload.get("data") or request.form.get("data") or ""
+    data_b64_text, _mime_hint = strip_data_url_prefix(data_b64_text)
     if not data_b64_text:
         return jsonify({"ok": False, "error": "Faltou 'data' (Base64) ou 'file'."}), 400
     try:
@@ -405,6 +482,7 @@ def api_decode():
             "urlsafe": urlsafe
         })
 
+
 # ---------- Erros simpáticos ----------
 @app.errorhandler(413)
 def too_large(_e):
@@ -413,6 +491,7 @@ def too_large(_e):
 @app.errorhandler(400)
 def bad_request(e):
     return jsonify({"ok": False, "error": str(e)}), 400
+
 
 # ---------- Main ----------
 if __name__ == "__main__":
