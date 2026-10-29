@@ -1,33 +1,38 @@
-# Imagem base enxuta
-FROM python:3.12-slim
+# Multi-stage build para imagem ultraleve e de alta performance em Rust
+FROM rust:1-bookworm AS builder
 
-# Variáveis de ambiente úteis
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PORT=8080 \
-    PIP_NO_CACHE_DIR=1
+WORKDIR /usr/src/app
 
-# Dependências do sistema (opcional, mas bom ter ca-certificates)
+# Prepara arquivos para cache de dependências
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
+
+# Copia código-fonte e assets
+COPY src ./src
+COPY favicon.ico .
+
+# Compila o binário de produção
+RUN touch src/main.rs && cargo build --release
+
+# --- Imagem final enxuta de produção ---
+FROM debian:bookworm-slim
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/app
 
-# Instala deps primeiro (cache mais eficiente)
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+# Copia o binário estático/independente
+COPY --from=builder /usr/src/app/target/release/rust-base64 /opt/app/rust-base64
 
-# Copia a aplicação
-COPY app.py .
+# Variáveis de ambiente
+ENV PORT=8080 \
+    MAX_MB=10
 
-# Ajusta permissões para rodar com UID arbitrário (padrão do OpenShift)
-# Sem chown: garantimos que grupo tem as mesmas permissões do owner
-RUN chmod -R g=u /opt/app
+# Ajusta permissões para execução com UID arbitrário (compatível com OpenShift e Kubernetes)
+RUN chmod -R g=u /opt/app && chmod +x /opt/app/rust-base64
 
-# OpenShift costuma injetar PORT, mas garantimos fallback para 8080
 EXPOSE 8080
 
-# Sobe com gunicorn (produção) apontando para objeto Flask "app" em app.py
-CMD gunicorn -w 2 -k gthread --threads 8 --timeout 60 \
-    -b 0.0.0.0:${PORT:-8080} app:app
+CMD ["/opt/app/rust-base64"]

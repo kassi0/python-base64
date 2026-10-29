@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Base64 Studio &amp; Diffchecker • Rust Edition</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ferramenta ultra-rápida em Rust para Base64, decodificação de Secrets YAML e Diffchecker comparador de textos.">
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="bg-grid"></div>
+
+  <div class="container">
+    <!-- Navigation Capsule Bar (Matching user design) -->
+    <div class="top-nav-bar">
+      <nav class="top-nav-capsule">
+        <button id="navTabBase64" type="button" class="nav-pill active">
+          <span>🔐</span> <span>Base64 Studio</span>
+        </button>
+        <button id="navTabDiff" type="button" class="nav-pill">
+          <span>⚖️</span> <span>Diffchecker</span>
+        </button>
+      </nav>
+    </div>
+
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand-section">
+        <div id="brandLogo" class="logo-badge">🦀</div>
+        <div class="title-wrap">
+          <h1 id="brandTitle">Base64 <span class="highlight">Studio</span> <span class="tag-rust">Rust 1.99</span></h1>
+          <p id="brandSubtitle">Encode &amp; Decode de alta performance • Zero dependências externas • Inspeção Hex &amp; Magic Bytes</p>
+        </div>
+      </div>
+      <div class="header-status">
+        <div class="status-badge">
+          <span class="status-dot"></span>
+          <span>Motor Axum Ativo</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- SECTION 1: BASE64 STUDIO -->
+    <div id="base64Section">
+      <!-- Toolbar / Controls -->
+      <div class="control-bar">
+        <div class="mode-segmented">
+          <button id="modeEncode" type="button" class="mode-btn active">
+            <span>⚡</span> Encode
+          </button>
+          <button id="modeDecode" type="button" class="mode-btn">
+            <span>🔓</span> Decode
+          </button>
+          <button id="modeAuto" type="button" class="mode-btn" title="Reconhece e decodifica automaticamente Base64 dentro de YAMLs (type: Opaque), JSON ou textos completos">
+            <span>🪄</span> Auto-Decode (YAML/Secret)
+          </button>
+        </div>
+
+        <div class="control-options">
+          <label class="custom-switch" title="Substitui '+' e '/' por '-' e '_' sem padding obrigatório">
+            <input id="switchUrlSafe" type="checkbox">
+            <span class="switch-slider"></span>
+            <span>URL-Safe</span>
+          </label>
+
+          <label class="custom-switch" title="Processa automaticamente enquanto você digita">
+            <input id="switchLive" type="checkbox">
+            <span class="switch-slider"></span>
+            <span>Modo Live</span>
+          </label>
+
+          <button id="btnToggleLayout" type="button" class="chip-btn" title="Alternar entre modo Vertical (um embaixo do outro) e Lado a Lado">
+            <span id="layoutIcon">⬍</span> <span id="layoutText">Vertical</span>
+          </button>
+        </div>
+
+        <div class="samples-group">
+          <span class="samples-label">Exemplos:</span>
+          <button type="button" class="chip-btn sample-btn" data-sample="text">Texto</button>
+          <button type="button" class="chip-btn sample-btn" data-sample="dataUrl">Data-URL</button>
+          <button type="button" class="chip-btn sample-btn" data-sample="k8sSecret">YAML Secret (Opaque)</button>
+          <button type="button" class="chip-btn sample-btn" data-sample="jwt">JWT</button>
+        </div>
+      </div>
+
+      <!-- Workspace Panes -->
+      <main id="workspaceGrid" class="workspace-grid">
+        <!-- Input Card -->
+        <section id="inputPane" class="pane-card">
+          <div class="dropzone-overlay">
+            <span style="font-size:32px;">📥</span>
+            <span>Solte o arquivo para carregar</span>
+          </div>
+
+          <div class="pane-header">
+            <span class="pane-title">
+              <span>📝</span> Entrada
+            </span>
+            <div class="pane-actions">
+              <span id="inputStats" class="pane-stats">0 chars • 0 B</span>
+              <button id="btnClear" type="button" class="icon-btn" title="Limpar tudo">🗑️</button>
+            </div>
+          </div>
+
+          <div class="editor-wrap">
+            <textarea id="inputText" class="code-editor" placeholder="Cole seu texto original aqui (ou arraste e solte um arquivo)..." spellcheck="false"></textarea>
+          </div>
+
+          <div class="file-bar">
+            <span id="fileInfoBadge" class="file-info-badge" style="display:none;"></span>
+            <label class="btn-file-select" title="Selecionar arquivo do disco">
+              <span>📁 Selecionar Arquivo</span>
+              <input id="fileInput" type="file" style="display:none;">
+            </label>
+          </div>
+        </section>
+
+        <!-- Center Action Bridge -->
+        <div class="action-bridge">
+          <button id="btnProcess" type="button" class="btn-process" title="Atalho: Ctrl+Enter">
+            <span>🚀</span> Processar
+          </button>
+          <button id="btnReencode" type="button" class="btn-process" style="display:none; background: linear-gradient(135deg, #8b5cf6 0%, #06b6d4 100%);" title="Converte o YAML com stringData de volta para Base64 (data:)">
+            <span>🔒</span> Re-encodar Secret (data:)
+          </button>
+          <button id="btnSwap" type="button" class="btn-swap" title="Inverter Entrada e Saída">
+            ⇄
+          </button>
+        </div>
+
+        <!-- Output Card -->
+        <section id="outputPane" class="pane-card">
+          <div class="pane-header">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="pane-title"><span>✨</span> Resultado</span>
+              <span id="detectedBadge" class="badge-pill detected" style="display:none;">Binário</span>
+              <span id="syncBadge" class="badge-pill" style="display:none; background:rgba(16,185,129,0.15); color:#34d399; border:1px solid rgba(16,185,129,0.3);">✏️ Editável • Sincroniza Base64</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <div class="output-tabs">
+                <button id="tabText" type="button" class="tab-btn active">Texto</button>
+                <button id="tabHex" type="button" class="tab-btn" style="display:none;">Hex</button>
+              </div>
+              <span id="outputStats" class="pane-stats">0 chars • 0 B</span>
+            </div>
+          </div>
+
+          <!-- Binary Media Preview -->
+          <div id="mediaPreviewBox" class="media-preview-box" style="display:none;">
+            <img id="mediaPreviewImg" alt="Prévia da Imagem Decodificada" style="display:none;">
+            <audio id="mediaPreviewAudio" controls style="display:none;"></audio>
+          </div>
+
+          <!-- Discovered Secrets List -->
+          <div id="autoItemsContainer" class="auto-items-container" style="display:none;"></div>
+
+          <div class="editor-wrap">
+            <textarea id="resultText" class="code-editor" readonly placeholder="O resultado aparecerá aqui..." spellcheck="false"></textarea>
+            <div id="hexInspector" class="hex-inspector" style="display:none;"></div>
+          </div>
+
+          <div class="pane-footer">
+            <div class="footer-btn-group">
+              <button id="btnCopy" type="button" class="btn-secondary" title="Copiar para área de transferência">
+                <span>📋</span> Copiar
+              </button>
+              <button id="btnDownload" type="button" class="btn-secondary btn-download" title="Baixar resultado">
+                <span>💾</span> Baixar Arquivo
+              </button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- SECTION 2: DIFFCHECKER -->
+    <div id="diffSection" style="display:none;">
+      <!-- Diff Control Bar -->
+      <div class="control-bar">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <button id="btnRunDiff" type="button" class="btn-process" title="Atalho: Ctrl+Enter">
+            <span>⚖️</span> Comparar Textos
+          </button>
+          <button id="btnSwapDiff" type="button" class="btn-swap" title="Inverter Texto Original e Modificado">
+            ⇄
+          </button>
+        </div>
+
+        <div class="control-options">
+          <label class="custom-switch" title="Compara automaticamente enquanto você digita">
+            <input id="switchDiffLive" type="checkbox" checked>
+            <span class="switch-slider"></span>
+            <span>Modo Live</span>
+          </label>
+          <label class="custom-switch" title="Ignora espaços múltiplos e tabs na comparação">
+            <input id="switchDiffWhitespace" type="checkbox">
+            <span class="switch-slider"></span>
+            <span>Ignorar Espaços</span>
+          </label>
+          <label class="custom-switch" title="Ignora diferenças entre maiúsculas e minúsculas">
+            <input id="switchDiffCase" type="checkbox">
+            <span class="switch-slider"></span>
+            <span>Ignorar Case</span>
+          </label>
+        </div>
+
+        <div class="samples-group">
+          <button id="btnDiffSample" type="button" class="chip-btn" title="Carregar exemplo de comparação">Exemplo</button>
+          <button id="btnDiffClear" type="button" class="chip-btn" title="Limpar ambos os textos">Limpar</button>
+        </div>
+      </div>
+
+      <!-- Diff Inputs (Side-by-side) -->
+      <div class="workspace-grid" style="grid-template-columns: 1fr 1fr;">
+        <div class="pane-card">
+          <div class="pane-header">
+            <span class="pane-title"><span>📄</span> Texto Original (A)</span>
+            <span id="diffStatsA" class="pane-stats">0 linhas • 0 chars</span>
+          </div>
+          <div class="editor-wrap">
+            <textarea id="diffTextA" class="code-editor" placeholder="Cole aqui o texto original (versão anterior)..." spellcheck="false"></textarea>
+          </div>
+        </div>
+
+        <div class="pane-card">
+          <div class="pane-header">
+            <span class="pane-title"><span>📝</span> Texto Modificado (B)</span>
+            <span id="diffStatsB" class="pane-stats">0 linhas • 0 chars</span>
+          </div>
+          <div class="editor-wrap">
+            <textarea id="diffTextB" class="code-editor" placeholder="Cole aqui o texto modificado (versão nova)..." spellcheck="false"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- Diff Output Viewer -->
+      <div id="diffViewer" class="diff-viewer">
+        <div class="diff-header">
+          <span style="font-weight:600; font-size:14px; display:flex; align-items:center; gap:8px;">
+            <span>🔍</span> Comparação de Diferenças
+          </span>
+          <div class="diff-stats-group">
+            <span id="diffBadgeAdd" class="diff-badge added">+0 Adições</span>
+            <span id="diffBadgeDel" class="diff-badge removed">-0 Remoções</span>
+            <span id="diffBadgeUnchanged" class="diff-badge unchanged">0 Inalteradas</span>
+          </div>
+        </div>
+        <div id="diffContent" class="diff-table">
+          <div style="padding: 32px; text-align: center; color: var(--text-muted); font-size: 13px;">
+            Digite ou cole textos nos dois campos acima para visualizar as alterações linha a linha em tempo real.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- API Reference Drawer -->
+    <div id="apiDrawer" class="api-drawer">
+      <div id="apiHeader" class="api-header">
+        <div class="api-title">
+          <span>⚡ API REST Integrada</span>
+          <span class="api-badge">JSON &amp; Multipart</span>
+        </div>
+        <span style="color:var(--text-muted); font-size:12px;">Clique para expandir ▾</span>
+      </div>
+      <div class="api-content">
+        <div class="api-grid">
+          <div class="api-card">
+            <div class="api-card-header">
+              <span class="api-method">POST</span>
+              <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-secondary);">/api/encode</span>
+            </div>
+            <p style="font-size:12px; color:var(--text-muted); margin-bottom:6px;">Codifica texto ou arquivo em Base64.</p>
+            <code>curl -X POST http://localhost:8080/api/encode \
+  -H "Content-Type: application/json" \
+  -d '{"data": "Olá Rust!", "urlsafe": false}'</code>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-header">
+              <span class="api-method">POST</span>
+              <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-secondary);">/api/decode</span>
+            </div>
+            <p style="font-size:12px; color:var(--text-muted); margin-bottom:6px;">Decodifica string (com suporte a data URLs e padding automático).</p>
+            <code>curl -X POST http://localhost:8080/api/decode \
+  -H "Content-Type: application/json" \
+  -d '{"data": "T2zDoSBSdXN0IQ=="}'</code>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-header">
+              <span class="api-method" style="background:rgba(139,92,246,0.2); color:#c084fc;">POST</span>
+              <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-secondary);">/api/auto-decode</span>
+            </div>
+            <p style="font-size:12px; color:var(--text-muted); margin-bottom:6px;">Detecta e decodifica Base64 em YAML (type: Opaque), JSON ou texto livre.</p>
+            <code>curl -X POST http://localhost:8080/api/auto-decode \
+  -H "Content-Type: text/plain" \
+  --data-binary @secret.yaml</code>
+          </div>
+
+          <div class="api-card">
+            <div class="api-card-header">
+              <span class="api-method" style="background:rgba(2,132,199,0.2); color:#38bdf8;">POST</span>
+              <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-secondary);">/api/diff</span>
+            </div>
+            <p style="font-size:12px; color:var(--text-muted); margin-bottom:6px;">Compara dois textos e retorna diferenças linha a linha.</p>
+            <code>curl -X POST http://localhost:8080/api/diff \
+  -H "Content-Type: application/json" \
+  -d '{"original": "A", "modified": "B"}'</code>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
